@@ -1,0 +1,47 @@
+name: Daily Congress Trades Tracker
+
+on:
+  # Timing comes from cron-job.org (workflow_dispatch) at 7:17 AM New York time, not GitHub's unreliable scheduler.
+  workflow_dispatch:
+
+concurrency:
+  group: congress-tracker
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Run tracker
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SEC_EMAIL: ${{ secrets.SEC_EMAIL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tracker.py
+      - name: Commit state
+        if: always()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add state/seen_ids.json
+          if [ -d digests ]; then git add digests/; fi
+          git diff --staged --quiet || git commit -m "Update seen_ids.json and daily digest"
+          git push
+
+      - name: Phone alert if this run failed
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl -s -H "Title: congress-trades: Daily Congress Trades Tracker FAILED" -H "Priority: high" -H "Tags: x" \
+            -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d "Tap to open the failed run on GitHub." \
+            "https://ntfy.sh/${NTFY_TOPIC}" || true
